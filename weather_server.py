@@ -164,7 +164,7 @@ async def process_weather_query(request: Request, dep=Depends(check_auth_header)
                 if chunk.choices[0].delta.content:
                     if is_first:
                         is_first = False
-                        print(f"first frame cost {(datetime.now() - start).total_seconds()}")
+                        print(f"first frame cost {(datetime.now() - start).total_seconds()}", flush=True)
                     # print(chunk.choices[0].delta.content, end='', flush=True)
                     yield json.dumps({"type": "summary", "data": chunk.choices[0].delta.content}) + "\n"
 
