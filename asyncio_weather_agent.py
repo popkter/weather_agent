@@ -1,9 +1,8 @@
 import json
 import os
-import time
 from datetime import datetime
 
-import requests
+import aiohttp
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Depends
@@ -37,7 +36,7 @@ def extract_hourly_weather_data(data):
 
 
 # 获取某地某天每小时的天气数据
-def get_weather_today_hours(location: str, start_date: str):
+async def get_weather_today_hours(session, location: str, start_date: str):
     url = (
         "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/"
         f"{location}/"
@@ -45,16 +44,13 @@ def get_weather_today_hours(location: str, start_date: str):
         f"{start_date}"
         "?unitGroup=metric&include=hours&key="
         f"{WEATHER_API_KEY}&contentType=json")
-
-    response = requests.get(url)
-
-    if response.status_code == 200:
-        weather_data = extract_hourly_weather_data(response.json())
-        # print(weather_data)
-        return weather_data
-    else:
+    try:
+        async with session.get(url) as response:
+            result = await response.json()
+            weather_data = extract_hourly_weather_data(result)
+            return weather_data
+    except Exception as e:
         print(f"请求失败，状态码：{response.status_code}")
-        # print(response.text)
         return ""
 
 
@@ -78,7 +74,7 @@ def extract_daily_weather_data(weather_data):
 
 
 # 获取某地某时间段每天的天气数据
-def get_weather_range_days(location: str, start_date: str, end_date: str):
+async def get_weather_range_days(session, location: str, start_date: str, end_date: str):
     url = (
         "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/"
         f"{location}/"
@@ -87,13 +83,13 @@ def get_weather_range_days(location: str, start_date: str, end_date: str):
         "?unitGroup=metric&include=days&key="
         f"{WEATHER_API_KEY}&contentType=json")
 
-    response = requests.get(url)
-
-    if response.status_code == 200:
-        weather_data = extract_daily_weather_data(response.json())
-        return weather_data
-    else:
-        print(f"请求失败，状态码：{response.status_code}")
+    try:
+        async with session.get(url) as response:
+            result = await response.json()
+            weather_data = extract_daily_weather_data(result)
+            return weather_data
+    except Exception as e:
+        print(f"请求失败，状态码")
         return ""
 
 
@@ -104,6 +100,42 @@ def check_auth_header(request: Request):
     token = auth_header[len("Bearer "):]
     if token != WEATHER_API_KEY:
         raise HTTPException(status_code=403, detail="Invalid token")
+
+
+async def weather_data_stream(location, start_date, end_date, tool_call, messages, start):
+    async with aiohttp.ClientSession() as session:
+        if tool_call.function.name == "get_weather_range_days":
+            weather_info = await get_weather_range_days(session, location, start_date, end_date)
+        else:
+            weather_info = await get_weather_today_hours(session, location, start_date)
+
+        key = "days_data" if tool_call.function.name == "get_weather_range_days" else "hours_data"
+        yield f"data: \"type\": \"{key}\", \"data\": {json.dumps(weather_info)}\n\n"
+
+        # 第三步：让模型分析数据
+        messages.append({
+            "role": "tool",
+            "tool_call_id": tool_call.id,
+            "content": "请根据结合上面的用户提问，根据以下小时级天气数据，生成一段简洁的中文天气播报以回答用户的问题，适合在日常广播或语音助手中播报。"
+                       "内容不超过120字，需包括：白天气温趋势（是否逐步升高），最高气温范围，天气状况（如晴朗、多云等），紫外线强度建议（如需防晒），傍晚及夜间的简要描述（是否舒适、是否多云）。"
+                       "如果用户的输入中有上午、下午、中午、晚上、凌晨这样的时间段，请参考如下定义"
+                       "上午（06:00 - 11:59），下午（12:00 - 17:59），傍晚（18:00 - 20:59），晚上（21:00 - 23:59），凌晨（00:00 - 05:59）"
+                       "总结的目标以不需要详细查看天气数据就能知道天气概况为目标。"
+                       "直接返回字符串，不需要返回天气数据，请确保返回的字符串不包含任何格式标记，如```json```等。"
+                       + json.dumps(weather_info)
+        })
+
+        analysis_stream = stream_llm_request(messages)
+        is_first = True
+        for chunk in analysis_stream:
+            if chunk.choices[0].delta.content:
+                if is_first:
+                    is_first = False
+                    print_log(f"first frame cost {(datetime.now() - start).total_seconds()}")
+                print_log(chunk.choices[0].delta.content)
+                yield f"data: \"type\": \"summary\", \"data\": {chunk.choices[0].delta.content}\n\n"
+
+        yield f"data: \"type\": \"finish\", \"data\": ''\n\n"
 
 
 # 处理天气查询
@@ -135,42 +167,10 @@ async def process_weather_query(request: Request, dep=Depends(check_auth_header)
         end_date = function_args.get("end_date")
 
         print(f"location {location} start_date {start_date} end_date {end_date}")
-        return StreamingResponse(weather_data_stream(location, start_date, end_date, tool_call, messages, start), media_type="text/event-stream")
-
-
-def weather_data_stream(location, start_date, end_date, tool_call, messages, start):
-    weather_info = get_weather_range_days(location, start_date, end_date) \
-        if tool_call.function.name == "get_weather_range_days" \
-        else get_weather_today_hours(location, start_date)
-
-    key = "days_data" if tool_call.function.name == "get_weather_range_days" else "hours_data"
-    yield f"data: \"type\": \"{key}\", \"data\": {json.dumps(weather_info)}\n\n"
-
-    # 第三步：让模型分析数据
-    messages.append({
-        "role": "tool",
-        "tool_call_id": tool_call.id,
-        "content": "请根据结合上面的用户提问，根据以下小时级天气数据，生成一段简洁的中文天气播报以回答用户的问题，适合在日常广播或语音助手中播报。"
-                   "内容不超过120字，需包括：白天气温趋势（是否逐步升高），最高气温范围，天气状况（如晴朗、多云等），紫外线强度建议（如需防晒），傍晚及夜间的简要描述（是否舒适、是否多云）。"
-                   "如果用户的输入中有上午、下午、中午、晚上、凌晨这样的时间段，请参考如下定义"
-                   "上午（06:00 - 11:59），下午（12:00 - 17:59），傍晚（18:00 - 20:59），晚上（21:00 - 23:59），凌晨（00:00 - 05:59）"
-                   "总结的目标以不需要详细查看天气数据就能知道天气概况为目标。"
-                   "直接返回字符串，不需要返回天气数据，请确保返回的字符串不包含任何格式标记，如```json```等。"
-                   + json.dumps(weather_info)
-    })
-
-    analysis_stream = stream_llm_request(messages)
-    is_first = True
-    for chunk in analysis_stream:
-        if chunk.choices[0].delta.content:
-            if is_first:
-                is_first = False
-                print_log(f"first frame cost {(datetime.now() - start).total_seconds()}")
-            print_log(chunk.choices[0].delta.content)
-            yield f"data: \"type\": \"summary\", \"data\": {chunk.choices[0].delta.content}\n\n"
-
-    yield f"data: \"type\": \"finish\", \"data\": ''\n\n"
+        return StreamingResponse(weather_data_stream(location, start_date, end_date, tool_call, messages, start),
+                                 media_type="text/event-stream")
+    return None
 
 
 if __name__ == '__main__':
-    uvicorn.run(app, host="0.0.0.0", port=WEATHER_PORT)
+    uvicorn.run("asyncio_weather_agent:app", host="0.0.0.0", port=WEATHER_PORT, workers=2, reload=True)
