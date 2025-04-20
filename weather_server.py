@@ -1,14 +1,12 @@
-import asyncio
 import json
 import os
-import random
 import time
 from datetime import datetime
 
 import requests
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, Depends, Query
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 
 from common import WEATHER_PORT, print_log
@@ -109,14 +107,12 @@ def check_auth_header(request: Request):
 
 
 # 处理天气查询
-@app.get("/query_weather")
-async def process_weather_query(
-        user_query: str = Query(..., description="用户查询的天气信息"),
-        dep=Depends(check_auth_header)):
+@app.post("/query_weather")
+async def process_weather_query(request: Request, dep=Depends(check_auth_header)):
     start = datetime.now()
-    # data = await request.json()
-    print("Raw user_query:", user_query)  # 打印原始请求体
-    # user_query = data.get("user_query", "")
+    data = await request.json()
+    user_query = data.get("user_query", "")
+    print_log("Raw user_query:", user_query)  # 打印原始请求体
 
     # 第一步：获取工具调用信息
     messages = [
@@ -166,7 +162,6 @@ def weather_data_stream(location, start_date, end_date, tool_call, messages, sta
     analysis_stream = stream_llm_request(messages)
     is_first = True
     for chunk in analysis_stream:
-        time.sleep(1)
         if chunk.choices[0].delta.content:
             if is_first:
                 is_first = False
@@ -176,10 +171,6 @@ def weather_data_stream(location, start_date, end_date, tool_call, messages, sta
 
     yield f"data: {{\"type\": \"finish\", \"data\": 'true'}}\n\n"
 
-
-# @app.get("/weather-stream")
-# async def get_weather_stream():
-#     return StreamingResponse(weather_data_stream(), media_type="text/event-stream")
 
 if __name__ == '__main__':
     uvicorn.run(app, host="0.0.0.0", port=WEATHER_PORT)
