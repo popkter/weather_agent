@@ -112,7 +112,7 @@ async def process_weather_query(request: Request, dep=Depends(check_auth_header)
     start = datetime.now()
     data = await request.json()
     user_query = data.get("user_query", "")
-    print_log("Raw user_query:", user_query)  # 打印原始请求体
+    print_log(f"Raw user_query:{user_query}")  # 打印原始请求体
 
     # 第一步：获取工具调用信息
     messages = [
@@ -143,8 +143,8 @@ def weather_data_stream(location, start_date, end_date, tool_call, messages, sta
         if tool_call.function.name == "get_weather_range_days" \
         else get_weather_today_hours(location, start_date)
 
-    key = "weather_data_days" if tool_call.function.name == "get_weather_range_days" else "weather_data_hours"
-    yield json.dumps({"type": key, "data": json.dumps(weather_info)}) + "\n"
+    key = "days_data" if tool_call.function.name == "get_weather_range_days" else "hours_data"
+    yield f"data: \"type\": \"{key}\", \"data\": {json.dumps(weather_info)}\n\n"
 
     # 第三步：让模型分析数据
     messages.append({
@@ -165,11 +165,11 @@ def weather_data_stream(location, start_date, end_date, tool_call, messages, sta
         if chunk.choices[0].delta.content:
             if is_first:
                 is_first = False
-                print(f"first frame cost {(datetime.now() - start).total_seconds()}", flush=True)
+                print_log(f"first frame cost {(datetime.now() - start).total_seconds()}")
             print_log(chunk.choices[0].delta.content)
-            yield f"data: {{\"type\": \"summary\", \"data\": {chunk.choices[0].delta.content}}}\n\n"
+            yield f"data: \"type\": \"summary\", \"data\": {chunk.choices[0].delta.content}\n\n"
 
-    yield f"data: {{\"type\": \"finish\", \"data\": 'true'}}\n\n"
+    yield f"data: \"type\": \"finish\", \"data\": ''\n\n"
 
 
 if __name__ == '__main__':
