@@ -18,5 +18,5 @@ COPY . .
 EXPOSE 10100
 
 # 运行命令
-CMD ["uvicorn", "weather_server:app", "--host", "0.0.0.0", "--port", "10100"]
+CMD ["uvicorn", "asyncio_weather_agent:app", "--host", "0.0.0.0", "--port", "10100"]
 
