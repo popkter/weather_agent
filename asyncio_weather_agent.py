@@ -95,6 +95,8 @@ async def get_weather_range_days(session, location: str, start_date: str, end_da
 
 
 def check_auth_header(request: Request):
+    print_log("check_auth_header: ",request)
+    print_log("check_auth_header: ", request.headers)
     auth_header = request.headers.get("authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Authorization header invalid or missing")
@@ -120,7 +122,7 @@ async def weather_data_stream(location, start_date, end_date, tool_call, message
 
             key = WeatherEventType.days_detail if tool_call.function.name == "get_weather_range_days" else WeatherEventType.hours_detail
             data = WeatherSseResponse(req_id=request_id, type=key,data=json.dumps(weather_info))
-            yield f"data: {data.to_dict()}\n\n"
+            yield f"data: {json.dumps(data.to_dict())}\n\n"
 
             # 让模型分析数据
             messages.append({
@@ -143,15 +145,15 @@ async def weather_data_stream(location, start_date, end_date, tool_call, message
                         is_first = False
                         print_log(f"[{request_id}] first frame cost {(datetime.now() - start).total_seconds()}")
                     data = WeatherSseResponse(req_id=request_id, type=WeatherEventType.summary, data=chunk.choices[0].delta.content)
-                    yield f"data: {data.to_dict()}\n\n"
+                    yield f"data: {json.dumps(data.to_dict())}\n\n"
 
             finish = WeatherSseResponse(req_id=request_id, type=WeatherEventType.finish, data='')
-            yield f"data: {finish.to_dict()}\n\n"
+            yield f"data: {json.dumps(finish.to_dict())}\n\n"
             print_log(f"[{request_id}] Stream completed")
         except Exception as e:
             print_log(f"[{request_id}] Error in weather_data_stream: {str(e)}")
             error = WeatherSseResponse(req_id=request_id, type=WeatherEventType.error, data=str(e))
-            yield f"data: {error.to_dict()}\n\n"
+            yield f"data: {json.dumps(error.to_dict())}\n\n"
 
 
 # 处理天气查询
@@ -197,9 +199,9 @@ async def process_weather_query(request: Request, dep=Depends(check_auth_header)
 
 if __name__ == '__main__':
     uvicorn.run(
-        "asyncio_weather_agent:app", 
-        host="0.0.0.0", 
-        port=WEATHER_PORT, 
+        "asyncio_weather_agent:app",
+        host="0.0.0.0",
+        port=WEATHER_PORT,
         workers=4,  # 增加工作进程数
         limit_concurrency=1000,  # 限制并发连接数
         timeout_keep_alive=30,  # 保持连接超时时间
